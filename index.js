@@ -56,9 +56,9 @@ var dirOutput = './output';
 var csvFileMeta = 'maildir.csv';
 var csvFileTerms = 'mailterms.csv';
 var csvFilePersons = 'mailpersons.csv';
-var outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmail', 'ToName', 'CCEmails', 'CCNames', 'BCCEmails', 'BCCNames', 'Text', 'TextLength', 'Hash', 'Attachments'];
+var outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmails', 'CCEmails', 'BCCEmails', 'Text', 'TextLength', 'Hash', 'Attachments'];
 var outputFieldsTerms = ['Hash', 'Term', 'Count'];
-var outputFieldsPersons = ['ID', 'Name', 'Email', 'Role'];
+var outputFieldsPersons = ['ID', 'Email', 'Role'];
 var files = new Set([]);
 var hashes = new Set([]);
 if (!fs.existsSync(dirOutput)) {
@@ -106,7 +106,7 @@ function mineText(hash, text) {
             return [2 /*return*/, new Promise(function (resolve) {
                     if (!hashes.has(hash)) {
                         hashes.add(hash);
-                        text = text.replace(/[:#_\\\/\t\(\)\'\"<>\[\]\*\$]/g, ' ');
+                        text = text.replace(/[\u{0080}-\u{FFFF}]/gu, "").replace(/[:#_\\\/\t\(\)\'\"<>\[\]\*\$]/g, ' ');
                         var corpus = new tm.Corpus([text]);
                         var cleansedCorpus = corpus.clean()
                             .trim()
@@ -133,27 +133,29 @@ function mineText(hash, text) {
     });
 }
 function cleanUpEmailsAndNames(str) {
-    return str ? str.replace(/[\s'"]+/g, '') : '';
+    return str ? str.trim().replace(/[\r\n|\r|\n'"]+/g, '') : '';
 }
-function transposePersonsMails(id, mails, names, role) {
+function switchNameParts(str) {
+    if (str && str.indexOf('@') === -1 && str.indexOf(',') !== -1) {
+        var parts = str.split(',');
+        if (parts.length === 2) {
+            str = parts[1].trim() + ' ' + parts[0].trim();
+        }
+    }
+    return str;
+}
+function transposeMails(id, mails, role) {
     return __awaiter(this, void 0, void 0, function () {
         return __generator(this, function (_a) {
             return [2 /*return*/, new Promise(function (resolve) {
-                    if ((names.length === 0 && mails.length === 0)) {
+                    if (mails.length === 0) {
                         resolve(true);
                     }
                     else {
                         var p_2 = [];
-                        if (mails.length === names.length) {
-                            names.forEach(function (e, i) {
-                                p_2.push(writeRow(stringifierPersons, [id, e, mails[i], role]));
-                            });
-                        }
-                        else {
-                            mails.forEach(function (e) {
-                                p_2.push(writeRow(stringifierPersons, [id, '', e, role]));
-                            });
-                        }
+                        mails.forEach(function (e) {
+                            p_2.push(writeRow(stringifierPersons, [id, e, role]));
+                        });
                         return Promise.all(p_2)
                             .then(function () { return resolve(true); });
                     }
@@ -194,11 +196,8 @@ function convertEml(fileName, eml) {
                         fromEmail: '',
                         fromName: '',
                         toEmails: [],
-                        toNames: [],
                         ccEmails: [],
-                        ccNames: [],
                         bccEmails: [],
-                        bccNames: [],
                         text: '',
                         textHash: '',
                         attachments: []
@@ -211,6 +210,7 @@ function convertEml(fileName, eml) {
                                 email.file = fileName;
                                 email.messageId = data.headers['Message-ID'] || '';
                                 email.dateSent = data.date;
+                                email.subject = data.subject;
                                 if (data.text) {
                                     email.textHash = require('crypto').createHash('md5').update(data.text).digest('base64');
                                     email.text = data.text;
@@ -227,13 +227,10 @@ function convertEml(fileName, eml) {
                                     email.fromName = emlformat.getEmailAddress(data.headers['X-From']).name;
                                 }
                                 email.fromEmail = cleanUpEmailsAndNames(email.fromEmail);
-                                email.fromName = cleanUpEmailsAndNames(email.fromName && email.fromName.length > 0 ? email.fromName : data.headers['X-From'] || '');
+                                email.fromName = switchNameParts(cleanUpEmailsAndNames(email.fromName && email.fromName.length > 0 ? email.fromName : data.headers['X-From'] || ''));
                                 email.toEmails = data.to && data.to.email ? cleanUpEmailsAndNames(data.to.email).split(',') : [];
-                                email.toNames = extractNames(data.headers['X-To']);
                                 email.ccEmails = data.headers['Cc'] ? data.headers['Cc'].split(',') : [];
-                                email.ccNames = extractNames(data.headers['X-cc']);
                                 email.bccEmails = data.headers['Bcc'] ? data.headers['Bcc'].split(',') : [];
-                                email.bccNames = extractNames(data.headers['X-bcc']);
                                 resolve(email);
                             });
                         }
@@ -259,7 +256,7 @@ function processEmlFile(emlFile) {
                         switch (_a.label) {
                             case 0:
                                 eml = fs.readFileSync(emlFile, 'utf-8');
-                                if (!(eml.substr(0, 11) === 'Message-ID:')) return [3 /*break*/, 11];
+                                if (!(eml.substr(0, 11) === 'Message-ID:')) return [3 /*break*/, 10];
                                 console.log('Processing ' + emlFile);
                                 return [4 /*yield*/, convertEml(emlFile.substr(dirInput.length), eml)];
                             case 1:
@@ -279,11 +276,8 @@ function processEmlFile(emlFile) {
                                     email.fromEmail,
                                     email.fromName,
                                     email.toEmails.join(','),
-                                    email.toNames.join(','),
                                     email.ccEmails.join(','),
-                                    email.ccNames.join(','),
                                     email.bccEmails.join(','),
-                                    email.bccNames.join(','),
                                     email.text,
                                     email.text.length.toString(),
                                     email.textHash,
@@ -291,46 +285,41 @@ function processEmlFile(emlFile) {
                                 ];
                                 _a.label = 2;
                             case 2:
-                                _a.trys.push([2, 9, , 10]);
+                                _a.trys.push([2, 8, , 9]);
                                 return [4 /*yield*/, writeRow(stringifierMeta, csvRowMeta)];
                             case 3:
                                 _a.sent();
                                 return [4 /*yield*/, mineText(email.textHash, email.text)];
                             case 4:
                                 _a.sent();
-                                return [4 /*yield*/, transposePersonsMails(email.messageId, [email.fromEmail], [email.fromName], 'From')];
+                                // await transposeMails(email.messageId, [email.fromEmail], 'From');
+                                return [4 /*yield*/, transposeMails(email.messageId, email.toEmails, 'To')];
                             case 5:
+                                // await transposeMails(email.messageId, [email.fromEmail], 'From');
                                 _a.sent();
-                                return [4 /*yield*/, transposePersonsMails(email.messageId, email.toEmails, email.toNames, 'To')];
+                                return [4 /*yield*/, transposeMails(email.messageId, email.ccEmails, 'Cc')];
                             case 6:
                                 _a.sent();
-                                return [4 /*yield*/, transposePersonsMails(email.messageId, email.ccEmails, email.ccNames, 'Cc')];
+                                return [4 /*yield*/, transposeMails(email.messageId, email.bccEmails, 'Bcc')];
                             case 7:
                                 _a.sent();
-                                return [4 /*yield*/, transposePersonsMails(email.messageId, email.bccEmails, email.bccNames, 'Bcc')];
-                            case 8:
-                                _a.sent();
                                 return [2 /*return*/, resolve(true)];
-                            case 9:
+                            case 8:
                                 error_1 = _a.sent();
                                 console.error(error_1);
                                 process.exit(1);
-                                return [3 /*break*/, 10];
-                            case 10: return [3 /*break*/, 12];
-                            case 11:
+                                return [3 /*break*/, 9];
+                            case 9: return [3 /*break*/, 11];
+                            case 10:
                                 resolve(true);
-                                _a.label = 12;
-                            case 12: return [2 /*return*/];
+                                _a.label = 11;
+                            case 11: return [2 /*return*/];
                         }
                     });
                 }); })];
         });
     });
 }
-// async function waitWrapper(file: string): Promise<boolean> {
-//   await processEmlFile(file);
-//   return new Promise((resolve) => { resolve(true) });
-// }
 var finder = find(dirInput);
 console.log("Collecting EML files...");
 finder.on('file', function (file) {
