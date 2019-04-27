@@ -2,9 +2,10 @@ const fs = require('fs');
 const find = require('findit');
 const path = require('upath');
 const crypt = require('crypto');
-const emlformat = require('eml-format');
+const simpleParser = require('mailparser').simpleParser;
 const stringify = require('csv-stringify');
 const tm = require('text-miner');
+const nGram = require('n-gram')
 
 interface IEmail {
   file: string,
@@ -22,12 +23,15 @@ interface IEmail {
 }
 
 const dirInput = '/Users/ralfbecher/Documents/Daten/maildir';
+// const dirInput = '/Users/ralfbecher/Documents/Daten/test';
 const dirOutput = './output';
 const csvFileMeta = 'maildir.csv';
 const csvFileTerms = 'mailterms.csv';
+const csvFileNGrams = 'mailngrams.csv';
 const csvFilePersons = 'mailpersons.csv';
 const outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmails', 'CCEmails', 'BCCEmails', 'Text', 'TextLength', 'Hash', 'Attachments'];
 const outputFieldsTerms = ['Hash', 'Term', 'Count'];
+const outputFieldsNGrams = ['Hash', 'nGram', 'Type', 'Count'];
 const outputFieldsPersons = ['ID', 'Email', 'Role'];
 const files:Set<string> = new Set([]);
 const hashes:Set<string> = new Set([]);
@@ -38,6 +42,7 @@ if (!fs.existsSync(dirOutput)) {
 
 let outputMeta = fs.createWriteStream(dirOutput + '/' + csvFileMeta, { flags: 'w' });
 let outputTerms = fs.createWriteStream(dirOutput + '/' + csvFileTerms, { flags: 'w' });
+let outputNGrams = fs.createWriteStream(dirOutput + '/' + csvFileNGrams, { flags: 'w' });
 let outputPersons = fs.createWriteStream(dirOutput + '/' + csvFilePersons, { flags: 'w' });
 
 const stringifierMeta = stringify({
@@ -54,6 +59,13 @@ const stringifierTerms = stringify({
   columns: outputFieldsTerms
 });
 
+const stringifierNGrams = stringify({
+  delimiter: ',',
+  header: true,
+  quoted: true,
+  columns: outputFieldsNGrams
+});
+
 const stringifierPersons = stringify({
   delimiter: ',',
   header: true,
@@ -64,25 +76,38 @@ const stringifierPersons = stringify({
 function startPipe() {
   stringifierMeta.pipe(outputMeta);
   stringifierTerms.pipe(outputTerms);
+  stringifierNGrams.pipe(outputNGrams);
   stringifierPersons.pipe(outputPersons);  
 }
 startPipe();
 
-function extractNames(emails: string): string[] {
-  let names = [];
-  emails = cleanUpEmailsAndNames(emails);
-  if (emails) {
-    let arrEmails = emails.split(',');
-    names = arrEmails.map((e: string) => emlformat.getEmailAddress(e).name).filter((e: string) => e && e.length > 0);
+function nGramAggr(biGrams: string[][], triGrams: string[][]): string[][] {
+  let res: string[][] = [];
+  let gramMap: Map<string, number[]> = new Map();
+  let nGram: string[][] = biGrams.concat(triGrams);
+
+  nGram.forEach((e: string[], i: number) => {
+    let t = e.length;
+    let k = e.join(' ');
+    if (!gramMap.has(k)) {
+      gramMap.set(k, [t, 1]);
+    } else {
+      let n: number[] = (gramMap.get(k) as number[]);
+      gramMap.set(k, [n[0], n[1] +1]);
+    }
+  });
+   
+  for (let e of gramMap.entries()) {
+    res.push([e[0], e[1][0].toString(), e[1][1].toString()]);
   }
-  return names;
+  return res;
 }
 
-async function mineText(hash: string, text: string): Promise<boolean> {
+async function mineText(hash: string, text: string): Promise<string> {
   return new Promise((resolve) => {
     if (!hashes.has(hash)) {
       hashes.add(hash);
-      text = text.replace(/[\u{0080}-\u{FFFF}]/gu,"").replace(/[:#_\\\/\t\(\)\'\"<>\[\]\*\$]/g,' ');
+      text = text.replace(/([^\x20-\uD7FF\uE000-\uFFFC\u{10000}-\u{10FFFF}])/ug,' ').replace(/[:#_\\\/\t\(\)\[\]\*\$\+"{}<>=~&%`´]/g,' ');
       let corpus = new tm.Corpus([text]);
       let cleansedCorpus = corpus.clean()
         .trim()
@@ -92,16 +117,22 @@ async function mineText(hash: string, text: string): Promise<boolean> {
         .removeNewlines()
         .clean()
         .toLower()
-        .removeWords(tm.STOPWORDS.EN);
+        .removeWords(tm.STOPWORDS.EN)
+        .stem('Porter');
+      let docs = cleansedCorpus.documents;
+      let list = docs[0].text ? docs[0].text.split(' ') : [];
+      let biGrams = nGram.bigram(list);
+      let triGrams = nGram.trigram(list);
       let terms = new tm.DocumentTermMatrix(cleansedCorpus);
-      let p: Promise<boolean>[] = [];
-      terms.vocabulary.forEach((e: string, i: number) => {
-        p.push(writeRow(stringifierTerms, [hash, e, terms.data[0][i]]));
+      terms.vocabulary.forEach(async (e: string, i: number) => {
+        await writeRow(stringifierTerms, [hash, e, terms.data[0][i]]);
       });
-      Promise.all(p)
-      .then(() => resolve(true));
+      nGramAggr(biGrams, triGrams).forEach(async (e: string[]) => {
+        await writeRow(stringifierNGrams, [hash, e[0], e[1], e[2]]);
+      });
+      resolve(docs[0].text);
     } else {
-      resolve(true);
+      resolve('');
     }
   });
 }
@@ -125,19 +156,18 @@ async function transposeMails(id: string, mails: string[], role: string): Promis
     if (mails.length === 0) {
       resolve(true);
     } else {
-      let p: Promise<boolean>[] = [];
-      mails.forEach((e: string) => {
-        p.push(writeRow(stringifierPersons, [id, e, role]));
+      mails.forEach(async (e: string) => {
+        await writeRow(stringifierPersons, [id, e, role]);
       });
-      return Promise.all(p)
-        .then(() => resolve(true));
+      resolve(true);
     }
   });
 }
 
 async function writeRow(stream: any, row: string[]): Promise<boolean> {
-  return new Promise((resolve) => {
-    stream.write(row, () => { resolve(true); });
+  return new Promise(async (resolve) => {
+    await stream.write(row);
+    resolve(true);
     // let res = stream.write(row);
     // if (res) {
     //   resolve(true);
@@ -153,8 +183,29 @@ async function writeRow(stream: any, row: string[]): Promise<boolean> {
   });
 }
 
+function headers2obj(headers: Map<string, string>): object {
+  let res: any = {};
+  for (let e of headers.entries()) {
+    res[e[0]] = e[1];
+  }
+  return res;
+}
+
+function getNameFromEmailAddress(email: string): string {
+  let result = '';
+  let regex = /^(.*?)(\s*\<(.*?)\>)$/g;
+  let match = regex.exec(email);
+  if (match) {
+    let name = match[1].replace(/"/g, "").trim();
+    if (name && name.length) {
+      result = name;
+    }
+  }
+  return result;
+}
+
 async function convertEml(fileName: string, eml: string): Promise<IEmail> {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     let email: IEmail = {
       file: '',
       messageId: '',
@@ -170,45 +221,38 @@ async function convertEml(fileName: string, eml: string): Promise<IEmail> {
       attachments: []
     };
 
-    if (eml.substr(0,11) === 'Message-ID:') {
-      try {
-        emlformat.read(eml, (error: any, data: any) => {
-          if (error) return console.log(error);
+    try {
+      let data: any = await simpleParser(eml);
+      let headers: any = headers2obj(data.headers);
 
-          email.file = fileName;
-          email.messageId = data.headers['Message-ID'] || '';
-          email.dateSent = data.date;
-          email.subject = data.subject;
+      email.file = fileName;
+      email.messageId = data.messageId || '';
+      email.dateSent = data.date;
+      email.subject = data.subject;
 
-          if (data.text) {
-            email.textHash = require('crypto').createHash('md5').update(data.text).digest('base64');
-            email.text = data.text;
-          } else {
-            email.textHash = '0000'; // placeholder for empty text#
-            email.text = '';
-          }
-
-          if (data.attachments && data.attachments.length > 0) {
-            email.attachments = data.attachments.map((e: { name: string; }) => e.name);
-          }
-          email.fromEmail = data.from && data.from.email ? data.from.email : '';
-          if (data.headers['X-From']) {
-            email.fromName = emlformat.getEmailAddress(data.headers['X-From']).name;
-          }
-          email.fromEmail = cleanUpEmailsAndNames(email.fromEmail);
-          email.fromName = switchNameParts(cleanUpEmailsAndNames(email.fromName && email.fromName.length > 0 ? email.fromName : data.headers['X-From'] || ''));
-
-          email.toEmails = data.to && data.to.email ? cleanUpEmailsAndNames(data.to.email).split(',') : [];
-          email.ccEmails = data.headers['Cc'] ? data.headers['Cc'].split(',') : [];
-          email.bccEmails = data.headers['Bcc'] ? data.headers['Bcc'].split(',') : [];
-          
-          resolve(email);          
-        });  
-      } catch (error) {
-        console.error(error);
-        resolve(email);
+      if (data.text) {
+        email.textHash = require('crypto').createHash('md5').update(data.text).digest('base64');
+        email.text = data.text;
+      } else {
+        email.textHash = '0000'; // placeholder for empty text#
+        email.text = '';
       }
-    } else {
+
+      email.fromEmail = cleanUpEmailsAndNames(data.from && data.from.text ? data.from.text : '');
+      email.fromName = switchNameParts(getNameFromEmailAddress(cleanUpEmailsAndNames(headers['x-from'] || '')));
+
+      email.toEmails = data.to && data.to.text ? cleanUpEmailsAndNames(data.to.text).split(',').map((e: string) => e.trim()) : [];
+      email.ccEmails = headers['cc'] ? headers['cc'].text.split(',').map((e: string) => e.trim()) : [];
+      email.bccEmails = headers['bcc'] ? headers['bcc'].text.split(',').map((e: string) => e.trim()) : [];
+      
+      if (data.attachments && data.attachments.length > 0) {
+        email.attachments = data.attachments
+          .filter((e: { contentDisposition: string }) => e.contentDisposition === 'attachment')
+          .map((e: { filename: string; }) => e.filename);
+      }
+      resolve(email);          
+    } catch (error) {
+      console.error(error);
       resolve(email);
     }
   });
@@ -217,7 +261,7 @@ async function convertEml(fileName: string, eml: string): Promise<IEmail> {
 async function processEmlFile(emlFile: string): Promise<boolean> {
   return new Promise(async (resolve) => {
     let eml = fs.readFileSync(emlFile, 'utf-8');
-    if (eml.substr(0,11) === 'Message-ID:') {
+    if (eml.substr(0,11) === 'Message-ID:' || eml.substr(0,14) === 'Received: from') {
       console.log('Processing ' + emlFile);
       let email: IEmail = await convertEml(emlFile.substr(dirInput.length), eml);
       let dateSent = '';
@@ -226,30 +270,31 @@ async function processEmlFile(emlFile: string): Promise<boolean> {
       } catch {
         // do nothing
       }
-      let csvRowMeta: string[] = [
-        email.file,
-        email.messageId,
-        dateSent,
-        email.subject || '',
-        email.fromEmail,
-        email.fromName,
-        email.toEmails.join(','),
-        email.ccEmails.join(','),
-        email.bccEmails.join(','),
-        email.text,
-        email.text.length.toString(),
-        email.textHash,
-        email.attachments.join(',')
-      ];
-
       try {
+        let cleanText = await mineText(email.textHash, email.text);
+        
+        let csvRowMeta: string[] = [
+          email.file,
+          email.messageId,
+          dateSent,
+          email.subject || '',
+          email.fromEmail,
+          email.fromName,
+          email.toEmails.join(','),
+          email.ccEmails.join(','),
+          email.bccEmails.join(','),
+          cleanText, // email.text,
+          email.text.length.toString(),
+          email.textHash,
+          email.attachments.join(',')
+        ];
+  
         await writeRow(stringifierMeta, csvRowMeta);
-        await mineText(email.textHash, email.text);
         // await transposeMails(email.messageId, [email.fromEmail], 'From');
         await transposeMails(email.messageId, email.toEmails, 'To');
         await transposeMails(email.messageId, email.ccEmails, 'Cc');
         await transposeMails(email.messageId, email.bccEmails, 'Bcc');
-        return resolve(true);
+        resolve(true);
       }
       catch (error) {
         console.error(error);
@@ -267,16 +312,21 @@ finder.on('file', (file: any) => {
   files.add(path.normalize(file));
 });
 
-finder.on('end', () => {
-  let p: Promise<boolean>[] = [];
-  for (let file of files.values()) {
-    p.push(processEmlFile(file));
-  }
-  Promise.all(p)
-  .then(() => {
+async function processAll(): Promise<boolean> {
+  console.log("Collecting EML files finished...");
+  return new Promise(async (resolve) => {
+    for (let file of files.values()) {
+      await processEmlFile(file);
+    }
     stringifierMeta.end();
     stringifierTerms.end();
+    stringifierNGrams.end();
     stringifierPersons.end();
     console.log("Processing finished.");
+    resolve(true);
   });
+}
+
+finder.on('end', () => {
+  processAll();
 });

@@ -48,16 +48,20 @@ var fs = require('fs');
 var find = require('findit');
 var path = require('upath');
 var crypt = require('crypto');
-var emlformat = require('eml-format');
+var simpleParser = require('mailparser').simpleParser;
 var stringify = require('csv-stringify');
 var tm = require('text-miner');
+var nGram = require('n-gram');
 var dirInput = '/Users/ralfbecher/Documents/Daten/maildir';
+// const dirInput = '/Users/ralfbecher/Documents/Daten/test';
 var dirOutput = './output';
 var csvFileMeta = 'maildir.csv';
 var csvFileTerms = 'mailterms.csv';
+var csvFileNGrams = 'mailngrams.csv';
 var csvFilePersons = 'mailpersons.csv';
 var outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmails', 'CCEmails', 'BCCEmails', 'Text', 'TextLength', 'Hash', 'Attachments'];
 var outputFieldsTerms = ['Hash', 'Term', 'Count'];
+var outputFieldsNGrams = ['Hash', 'nGram', 'Type', 'Count'];
 var outputFieldsPersons = ['ID', 'Email', 'Role'];
 var files = new Set([]);
 var hashes = new Set([]);
@@ -66,6 +70,7 @@ if (!fs.existsSync(dirOutput)) {
 }
 var outputMeta = fs.createWriteStream(dirOutput + '/' + csvFileMeta, { flags: 'w' });
 var outputTerms = fs.createWriteStream(dirOutput + '/' + csvFileTerms, { flags: 'w' });
+var outputNGrams = fs.createWriteStream(dirOutput + '/' + csvFileNGrams, { flags: 'w' });
 var outputPersons = fs.createWriteStream(dirOutput + '/' + csvFilePersons, { flags: 'w' });
 var stringifierMeta = stringify({
     delimiter: ',',
@@ -79,6 +84,12 @@ var stringifierTerms = stringify({
     quoted: true,
     columns: outputFieldsTerms
 });
+var stringifierNGrams = stringify({
+    delimiter: ',',
+    header: true,
+    quoted: true,
+    columns: outputFieldsNGrams
+});
 var stringifierPersons = stringify({
     delimiter: ',',
     header: true,
@@ -88,25 +99,49 @@ var stringifierPersons = stringify({
 function startPipe() {
     stringifierMeta.pipe(outputMeta);
     stringifierTerms.pipe(outputTerms);
+    stringifierNGrams.pipe(outputNGrams);
     stringifierPersons.pipe(outputPersons);
 }
 startPipe();
-function extractNames(emails) {
-    var names = [];
-    emails = cleanUpEmailsAndNames(emails);
-    if (emails) {
-        var arrEmails = emails.split(',');
-        names = arrEmails.map(function (e) { return emlformat.getEmailAddress(e).name; }).filter(function (e) { return e && e.length > 0; });
+function nGramAggr(biGrams, triGrams) {
+    var e_1, _a;
+    var res = [];
+    var gramMap = new Map();
+    var nGram = biGrams.concat(triGrams);
+    nGram.forEach(function (e, i) {
+        var t = e.length;
+        var k = e.join(' ');
+        if (!gramMap.has(k)) {
+            gramMap.set(k, [t, 1]);
+        }
+        else {
+            var n = gramMap.get(k);
+            gramMap.set(k, [n[0], n[1] + 1]);
+        }
+    });
+    try {
+        for (var _b = __values(gramMap.entries()), _c = _b.next(); !_c.done; _c = _b.next()) {
+            var e = _c.value;
+            res.push([e[0], e[1][0].toString(), e[1][1].toString()]);
+        }
     }
-    return names;
+    catch (e_1_1) { e_1 = { error: e_1_1 }; }
+    finally {
+        try {
+            if (_c && !_c.done && (_a = _b.return)) _a.call(_b);
+        }
+        finally { if (e_1) throw e_1.error; }
+    }
+    return res;
 }
 function mineText(hash, text) {
     return __awaiter(this, void 0, void 0, function () {
+        var _this = this;
         return __generator(this, function (_a) {
             return [2 /*return*/, new Promise(function (resolve) {
                     if (!hashes.has(hash)) {
                         hashes.add(hash);
-                        text = text.replace(/[\u{0080}-\u{FFFF}]/gu, "").replace(/[:#_\\\/\t\(\)\'\"<>\[\]\*\$]/g, ' ');
+                        text = text.replace(/([^\x20-\uD7FF\uE000-\uFFFC\u{10000}-\u{10FFFF}])/ug, ' ').replace(/[:#_\\\/\t\(\)\[\]\*\$\+"{}<>=~&%`´]/g, ' ');
                         var corpus = new tm.Corpus([text]);
                         var cleansedCorpus = corpus.clean()
                             .trim()
@@ -116,17 +151,37 @@ function mineText(hash, text) {
                             .removeNewlines()
                             .clean()
                             .toLower()
-                            .removeWords(tm.STOPWORDS.EN);
+                            .removeWords(tm.STOPWORDS.EN)
+                            .stem('Porter');
+                        var docs = cleansedCorpus.documents;
+                        var list = docs[0].text ? docs[0].text.split(' ') : [];
+                        var biGrams = nGram.bigram(list);
+                        var triGrams = nGram.trigram(list);
                         var terms_1 = new tm.DocumentTermMatrix(cleansedCorpus);
-                        var p_1 = [];
-                        terms_1.vocabulary.forEach(function (e, i) {
-                            p_1.push(writeRow(stringifierTerms, [hash, e, terms_1.data[0][i]]));
-                        });
-                        Promise.all(p_1)
-                            .then(function () { return resolve(true); });
+                        terms_1.vocabulary.forEach(function (e, i) { return __awaiter(_this, void 0, void 0, function () {
+                            return __generator(this, function (_a) {
+                                switch (_a.label) {
+                                    case 0: return [4 /*yield*/, writeRow(stringifierTerms, [hash, e, terms_1.data[0][i]])];
+                                    case 1:
+                                        _a.sent();
+                                        return [2 /*return*/];
+                                }
+                            });
+                        }); });
+                        nGramAggr(biGrams, triGrams).forEach(function (e) { return __awaiter(_this, void 0, void 0, function () {
+                            return __generator(this, function (_a) {
+                                switch (_a.label) {
+                                    case 0: return [4 /*yield*/, writeRow(stringifierNGrams, [hash, e[0], e[1], e[2]])];
+                                    case 1:
+                                        _a.sent();
+                                        return [2 /*return*/];
+                                }
+                            });
+                        }); });
+                        resolve(docs[0].text);
                     }
                     else {
-                        resolve(true);
+                        resolve('');
                     }
                 })];
         });
@@ -146,18 +201,24 @@ function switchNameParts(str) {
 }
 function transposeMails(id, mails, role) {
     return __awaiter(this, void 0, void 0, function () {
+        var _this = this;
         return __generator(this, function (_a) {
             return [2 /*return*/, new Promise(function (resolve) {
                     if (mails.length === 0) {
                         resolve(true);
                     }
                     else {
-                        var p_2 = [];
-                        mails.forEach(function (e) {
-                            p_2.push(writeRow(stringifierPersons, [id, e, role]));
-                        });
-                        return Promise.all(p_2)
-                            .then(function () { return resolve(true); });
+                        mails.forEach(function (e) { return __awaiter(_this, void 0, void 0, function () {
+                            return __generator(this, function (_a) {
+                                switch (_a.label) {
+                                    case 0: return [4 /*yield*/, writeRow(stringifierPersons, [id, e, role])];
+                                    case 1:
+                                        _a.sent();
+                                        return [2 /*return*/];
+                                }
+                            });
+                        }); });
+                        resolve(true);
                     }
                 })];
         });
@@ -165,50 +226,84 @@ function transposeMails(id, mails, role) {
 }
 function writeRow(stream, row) {
     return __awaiter(this, void 0, void 0, function () {
+        var _this = this;
         return __generator(this, function (_a) {
-            return [2 /*return*/, new Promise(function (resolve) {
-                    stream.write(row, function () { resolve(true); });
-                    // let res = stream.write(row);
-                    // if (res) {
-                    //   resolve(true);
-                    // } else {
-                    //   console.log("\n\nDRAIN...");
-                    //   stream.pause();
-                    //   stream.once('drain', () => {
-                    //     stream.resume();
-                    //     console.log("\n\nRESUME...");
-                    //     resolve(true);
-                    //   });
-                    // }
-                })];
+            return [2 /*return*/, new Promise(function (resolve) { return __awaiter(_this, void 0, void 0, function () {
+                    return __generator(this, function (_a) {
+                        switch (_a.label) {
+                            case 0: return [4 /*yield*/, stream.write(row)];
+                            case 1:
+                                _a.sent();
+                                resolve(true);
+                                return [2 /*return*/];
+                        }
+                    });
+                }); })];
         });
     });
 }
+function headers2obj(headers) {
+    var e_2, _a;
+    var res = {};
+    try {
+        for (var _b = __values(headers.entries()), _c = _b.next(); !_c.done; _c = _b.next()) {
+            var e = _c.value;
+            res[e[0]] = e[1];
+        }
+    }
+    catch (e_2_1) { e_2 = { error: e_2_1 }; }
+    finally {
+        try {
+            if (_c && !_c.done && (_a = _b.return)) _a.call(_b);
+        }
+        finally { if (e_2) throw e_2.error; }
+    }
+    return res;
+}
+function getNameFromEmailAddress(email) {
+    var result = '';
+    var regex = /^(.*?)(\s*\<(.*?)\>)$/g;
+    var match = regex.exec(email);
+    if (match) {
+        var name_1 = match[1].replace(/"/g, "").trim();
+        if (name_1 && name_1.length) {
+            result = name_1;
+        }
+    }
+    return result;
+}
 function convertEml(fileName, eml) {
     return __awaiter(this, void 0, void 0, function () {
+        var _this = this;
         return __generator(this, function (_a) {
-            return [2 /*return*/, new Promise(function (resolve, reject) {
-                    var email = {
-                        file: '',
-                        messageId: '',
-                        dateSent: new Date(),
-                        subject: '',
-                        fromEmail: '',
-                        fromName: '',
-                        toEmails: [],
-                        ccEmails: [],
-                        bccEmails: [],
-                        text: '',
-                        textHash: '',
-                        attachments: []
-                    };
-                    if (eml.substr(0, 11) === 'Message-ID:') {
-                        try {
-                            emlformat.read(eml, function (error, data) {
-                                if (error)
-                                    return console.log(error);
+            return [2 /*return*/, new Promise(function (resolve, reject) { return __awaiter(_this, void 0, void 0, function () {
+                    var email, data, headers, error_1;
+                    return __generator(this, function (_a) {
+                        switch (_a.label) {
+                            case 0:
+                                email = {
+                                    file: '',
+                                    messageId: '',
+                                    dateSent: new Date(),
+                                    subject: '',
+                                    fromEmail: '',
+                                    fromName: '',
+                                    toEmails: [],
+                                    ccEmails: [],
+                                    bccEmails: [],
+                                    text: '',
+                                    textHash: '',
+                                    attachments: []
+                                };
+                                _a.label = 1;
+                            case 1:
+                                _a.trys.push([1, 3, , 4]);
+                                return [4 /*yield*/, simpleParser(eml)];
+                            case 2:
+                                data = _a.sent();
+                                headers = headers2obj(data.headers);
                                 email.file = fileName;
-                                email.messageId = data.headers['Message-ID'] || '';
+                                email.messageId = data.messageId || '';
                                 email.dateSent = data.date;
                                 email.subject = data.subject;
                                 if (data.text) {
@@ -219,30 +314,27 @@ function convertEml(fileName, eml) {
                                     email.textHash = '0000'; // placeholder for empty text#
                                     email.text = '';
                                 }
+                                email.fromEmail = cleanUpEmailsAndNames(data.from && data.from.text ? data.from.text : '');
+                                email.fromName = switchNameParts(getNameFromEmailAddress(cleanUpEmailsAndNames(headers['x-from'] || '')));
+                                email.toEmails = data.to && data.to.text ? cleanUpEmailsAndNames(data.to.text).split(',').map(function (e) { return e.trim(); }) : [];
+                                email.ccEmails = headers['cc'] ? headers['cc'].text.split(',').map(function (e) { return e.trim(); }) : [];
+                                email.bccEmails = headers['bcc'] ? headers['bcc'].text.split(',').map(function (e) { return e.trim(); }) : [];
                                 if (data.attachments && data.attachments.length > 0) {
-                                    email.attachments = data.attachments.map(function (e) { return e.name; });
+                                    email.attachments = data.attachments
+                                        .filter(function (e) { return e.contentDisposition === 'attachment'; })
+                                        .map(function (e) { return e.filename; });
                                 }
-                                email.fromEmail = data.from && data.from.email ? data.from.email : '';
-                                if (data.headers['X-From']) {
-                                    email.fromName = emlformat.getEmailAddress(data.headers['X-From']).name;
-                                }
-                                email.fromEmail = cleanUpEmailsAndNames(email.fromEmail);
-                                email.fromName = switchNameParts(cleanUpEmailsAndNames(email.fromName && email.fromName.length > 0 ? email.fromName : data.headers['X-From'] || ''));
-                                email.toEmails = data.to && data.to.email ? cleanUpEmailsAndNames(data.to.email).split(',') : [];
-                                email.ccEmails = data.headers['Cc'] ? data.headers['Cc'].split(',') : [];
-                                email.bccEmails = data.headers['Bcc'] ? data.headers['Bcc'].split(',') : [];
                                 resolve(email);
-                            });
+                                return [3 /*break*/, 4];
+                            case 3:
+                                error_1 = _a.sent();
+                                console.error(error_1);
+                                resolve(email);
+                                return [3 /*break*/, 4];
+                            case 4: return [2 /*return*/];
                         }
-                        catch (error) {
-                            console.error(error);
-                            resolve(email);
-                        }
-                    }
-                    else {
-                        resolve(email);
-                    }
-                })];
+                    });
+                }); })];
         });
     });
 }
@@ -251,12 +343,12 @@ function processEmlFile(emlFile) {
         var _this = this;
         return __generator(this, function (_a) {
             return [2 /*return*/, new Promise(function (resolve) { return __awaiter(_this, void 0, void 0, function () {
-                    var eml, email, dateSent, csvRowMeta, error_1;
+                    var eml, email, dateSent, cleanText, csvRowMeta, error_2;
                     return __generator(this, function (_a) {
                         switch (_a.label) {
                             case 0:
                                 eml = fs.readFileSync(emlFile, 'utf-8');
-                                if (!(eml.substr(0, 11) === 'Message-ID:')) return [3 /*break*/, 10];
+                                if (!(eml.substr(0, 11) === 'Message-ID:' || eml.substr(0, 14) === 'Received: from')) return [3 /*break*/, 10];
                                 console.log('Processing ' + emlFile);
                                 return [4 /*yield*/, convertEml(emlFile.substr(dirInput.length), eml)];
                             case 1:
@@ -268,6 +360,12 @@ function processEmlFile(emlFile) {
                                 catch (_b) {
                                     // do nothing
                                 }
+                                _a.label = 2;
+                            case 2:
+                                _a.trys.push([2, 8, , 9]);
+                                return [4 /*yield*/, mineText(email.textHash, email.text)];
+                            case 3:
+                                cleanText = _a.sent();
                                 csvRowMeta = [
                                     email.file,
                                     email.messageId,
@@ -278,18 +376,12 @@ function processEmlFile(emlFile) {
                                     email.toEmails.join(','),
                                     email.ccEmails.join(','),
                                     email.bccEmails.join(','),
-                                    email.text,
+                                    cleanText,
                                     email.text.length.toString(),
                                     email.textHash,
                                     email.attachments.join(',')
                                 ];
-                                _a.label = 2;
-                            case 2:
-                                _a.trys.push([2, 8, , 9]);
                                 return [4 /*yield*/, writeRow(stringifierMeta, csvRowMeta)];
-                            case 3:
-                                _a.sent();
-                                return [4 /*yield*/, mineText(email.textHash, email.text)];
                             case 4:
                                 _a.sent();
                                 // await transposeMails(email.messageId, [email.fromEmail], 'From');
@@ -303,10 +395,11 @@ function processEmlFile(emlFile) {
                                 return [4 /*yield*/, transposeMails(email.messageId, email.bccEmails, 'Bcc')];
                             case 7:
                                 _a.sent();
-                                return [2 /*return*/, resolve(true)];
+                                resolve(true);
+                                return [3 /*break*/, 9];
                             case 8:
-                                error_1 = _a.sent();
-                                console.error(error_1);
+                                error_2 = _a.sent();
+                                console.error(error_2);
                                 process.exit(1);
                                 return [3 /*break*/, 9];
                             case 9: return [3 /*break*/, 11];
@@ -325,28 +418,55 @@ console.log("Collecting EML files...");
 finder.on('file', function (file) {
     files.add(path.normalize(file));
 });
-finder.on('end', function () {
-    var e_1, _a;
-    var p = [];
-    try {
-        for (var _b = __values(files.values()), _c = _b.next(); !_c.done; _c = _b.next()) {
-            var file = _c.value;
-            p.push(processEmlFile(file));
-        }
-    }
-    catch (e_1_1) { e_1 = { error: e_1_1 }; }
-    finally {
-        try {
-            if (_c && !_c.done && (_a = _b.return)) _a.call(_b);
-        }
-        finally { if (e_1) throw e_1.error; }
-    }
-    Promise.all(p)
-        .then(function () {
-        stringifierMeta.end();
-        stringifierTerms.end();
-        stringifierPersons.end();
-        console.log("Processing finished.");
+function processAll() {
+    return __awaiter(this, void 0, void 0, function () {
+        var _this = this;
+        return __generator(this, function (_a) {
+            console.log("Collecting EML files finished...");
+            return [2 /*return*/, new Promise(function (resolve) { return __awaiter(_this, void 0, void 0, function () {
+                    var e_3, _a, _b, _c, file, e_3_1;
+                    return __generator(this, function (_d) {
+                        switch (_d.label) {
+                            case 0:
+                                _d.trys.push([0, 5, 6, 7]);
+                                _b = __values(files.values()), _c = _b.next();
+                                _d.label = 1;
+                            case 1:
+                                if (!!_c.done) return [3 /*break*/, 4];
+                                file = _c.value;
+                                return [4 /*yield*/, processEmlFile(file)];
+                            case 2:
+                                _d.sent();
+                                _d.label = 3;
+                            case 3:
+                                _c = _b.next();
+                                return [3 /*break*/, 1];
+                            case 4: return [3 /*break*/, 7];
+                            case 5:
+                                e_3_1 = _d.sent();
+                                e_3 = { error: e_3_1 };
+                                return [3 /*break*/, 7];
+                            case 6:
+                                try {
+                                    if (_c && !_c.done && (_a = _b.return)) _a.call(_b);
+                                }
+                                finally { if (e_3) throw e_3.error; }
+                                return [7 /*endfinally*/];
+                            case 7:
+                                stringifierMeta.end();
+                                stringifierTerms.end();
+                                stringifierNGrams.end();
+                                stringifierPersons.end();
+                                console.log("Processing finished.");
+                                resolve(true);
+                                return [2 /*return*/];
+                        }
+                    });
+                }); })];
+        });
     });
+}
+finder.on('end', function () {
+    processAll();
 });
 //# sourceMappingURL=index.js.map
