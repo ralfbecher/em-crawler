@@ -38,7 +38,7 @@ const csvFileTexts = 'mailtexts.csv';
 const csvFileTerms = 'mailterms.csv';
 const csvFileNGrams = 'mailngrams.csv';
 const csvFilePersons = 'mailpersons.csv';
-const outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmails', 'CCEmails', 'BCCEmails', 'TextLength', 'Hash', 'Attachments'];
+const outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmails', 'CCEmails', 'BCCEmails', 'Hash', 'TextLength', 'Attachments'];
 const outputFieldsTexts = ['Hash', 'CleansedText'];
 const outputFieldsTerms = ['Hash', 'Term', 'Count'];
 const outputFieldsNGrams = ['Hash', 'nGram', 'Type', 'Count'];
@@ -264,7 +264,7 @@ async function convertEml(fileName: string, eml: string): Promise<IEmail> {
       if (data.text) {
         email.textHash = require('crypto').createHash('md5').update(data.text).digest('base64');
         email.text = data.text;
-        email.textLength = data.text.lengh;
+        email.textLength = data.text.length;
       } else {
         email.textHash = '0000'; // placeholder for empty text
       }
