@@ -6,6 +6,13 @@ const simpleParser = require('mailparser').simpleParser;
 const stringify = require('csv-stringify');
 const tm = require('text-miner');
 const nGram = require('n-gram')
+const htmlTags = require('html-tags');
+const voidHtmlTags = require('html-tags/void');
+const cssProperties = require('known-css-properties').all;
+
+const additionalWords = ['http', 'https', 'www', 'cc', 'nbsp', 'gif', 'image', 'images', 'spacer', 'href', 'arial', 'helvetica', 'verdana', 
+  'bgcolor', 'ffffff', 'mime', 'mailto', 'cgi', 'bin'];
+const removeWords: string[] = tm.STOPWORDS.EN.concat(additionalWords).concat(htmlTags).concat(voidHtmlTags).concat(cssProperties);
 
 interface IEmail {
   file: string,
@@ -86,12 +93,15 @@ function nGramAggr(nGrams: string[][]): string[][] {
   let gramMap: Map<string, number[]> = new Map();
   nGrams.forEach((e: string[], i: number) => {
     let t = e.length;
-    let k = e.join(' ');
-    if (!gramMap.has(k)) {
-      gramMap.set(k, [t, 1]);
-    } else {
-      let n: number[] = (gramMap.get(k) as number[]);
-      gramMap.set(k, [n[0], n[1] +1]);
+    // filter one character words
+    if (t === e.filter(w => w.length > 1).length) { 
+        let k = e.join(' ');
+      if (!gramMap.has(k)) {
+        gramMap.set(k, [t, 1]);
+      } else {
+        let n: number[] = (gramMap.get(k) as number[]);
+        gramMap.set(k, [n[0], n[1] +1]);
+      }
     }
   });
    
@@ -105,7 +115,8 @@ async function mineText(hash: string, text: string): Promise<string> {
   return new Promise((resolve) => {
     if (!hashes.has(hash)) {
       hashes.add(hash);
-      text = text.replace(/([^\x20-\uD7FF\uE000-\uFFFC\u{10000}-\u{10FFFF}])/ug,' ').replace(/[:#_\\\/\t\(\)\[\]\*\$\+"{}<>=~&%`´]/g,' ');
+      text = tm.expandContractions(text);
+      text = text.replace(/([^\x20-\uD7FF\uE000-\uFFFC\u{10000}-\u{10FFFF}])/ug,' ').replace(/[\x7F:#_\\\/\t\(\)\[\]\*\$\+\|'"{}<>=~&%`´]/g,' ');
       let corpus = new tm.Corpus([text]);
       let cleansedCorpus = corpus.clean()
         .trim()
@@ -115,7 +126,7 @@ async function mineText(hash: string, text: string): Promise<string> {
         .removeNewlines()
         .clean()
         .toLower()
-        .removeWords(tm.STOPWORDS.EN)
+        .removeWords(removeWords)
         .stem('Porter');
       let docs = cleansedCorpus.documents;
       let list = docs[0].text ? docs[0].text.split(' ') : [];
@@ -127,7 +138,7 @@ async function mineText(hash: string, text: string): Promise<string> {
       });
       // nGramAggr(biGrams.concat(triGrams)).forEach(async (e: string[]) => {
       nGramAggr(biGrams).forEach(async (e: string[]) => {
-          await writeRow(stringifierNGrams, [hash, e[0], e[1], e[2]]);
+        await writeRow(stringifierNGrams, [hash, e[0], e[1], e[2]]);
       });
       resolve(docs[0].text);
     } else {
@@ -243,7 +254,10 @@ async function convertEml(fileName: string, eml: string): Promise<IEmail> {
       email.toEmails = data.to && data.to.text ? cleanUpEmailsAndNames(data.to.text).split(',').map((e: string) => e.trim()) : [];
       email.ccEmails = headers['cc'] ? headers['cc'].text.split(',').map((e: string) => e.trim()) : [];
       email.bccEmails = headers['bcc'] ? headers['bcc'].text.split(',').map((e: string) => e.trim()) : [];
-      
+      if (email.ccEmails.length && email.bccEmails.length && email.ccEmails.join(',') === email.bccEmails.join(',')) {
+        email.bccEmails = [];
+      }
+
       if (data.attachments && data.attachments.length > 0) {
         email.attachments = data.attachments
           .filter((e: { contentDisposition: string }) => e.contentDisposition === 'attachment')
