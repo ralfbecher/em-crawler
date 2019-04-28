@@ -15,7 +15,7 @@ const additionalWords = ['http', 'https', 'www', 'cc', 'nbsp', 'gif', 'image', '
 const removeWords: string[] = tm.STOPWORDS.EN.concat(additionalWords).concat(htmlTags).concat(voidHtmlTags).concat(cssProperties);
 
 interface IEmail {
-  file: string,
+  file: string;
   messageId: string;
   dateSent: Date;
   subject: string;
@@ -30,19 +30,54 @@ interface IEmail {
   attachments: string[];
 }
 
+class Email implements IEmail {
+  public file!: string;
+  public messageId!: string;
+  public dateSent!: Date;
+  public subject!: string;
+  public fromEmail!: string;
+  public fromName!: string;
+  public toEmails!: string[];
+  public ccEmails!: string[];
+  public bccEmails!: string[];
+  public textHash!: string;
+  public text!: string;
+  public textLength!: number;
+  public attachments!: string[];
+
+  constructor () {
+    this.file = '';
+    this.messageId = '',
+    this.dateSent = new Date(),
+    this.subject = '',
+    this.fromEmail = '',
+    this.fromName = '',
+    this.toEmails = [],
+    this.ccEmails = [],
+    this.bccEmails = [],
+    this.textHash = '',
+    this.text = '',
+    this.textLength = 0,
+    this.attachments = []
+  }
+}
+
 const dirInput = '/Users/ralfbecher/Documents/Daten/maildir';
 // const dirInput = '/Users/ralfbecher/Documents/Daten/test';
 const dirOutput = './output';
+
 const csvFileMeta = 'maildir.csv';
 const csvFileTexts = 'mailtexts.csv';
 const csvFileTerms = 'mailterms.csv';
 const csvFileNGrams = 'mailngrams.csv';
 const csvFilePersons = 'mailpersons.csv';
+
 const outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmails', 'CCEmails', 'BCCEmails', 'Hash', 'TextLength', 'Attachments'];
 const outputFieldsTexts = ['Hash', 'Text', 'CleansedText'];
 const outputFieldsTerms = ['Hash', 'Term', 'Count'];
 const outputFieldsNGrams = ['Hash', 'nGram', 'Type', 'Count'];
 const outputFieldsPersons = ['ID', 'Email', 'Role'];
+
 const files:Set<string> = new Set([]);
 const hashes:Set<string> = new Set([]);
 
@@ -236,21 +271,7 @@ function getNameFromEmailAddress(email: string): string {
 
 async function convertEml(fileName: string, eml: string): Promise<IEmail> {
   return new Promise(async (resolve, reject) => {
-    let email: IEmail = {
-      file: '',
-      messageId: '',
-      dateSent: new Date(),
-      subject: '',
-      fromEmail: '',
-      fromName: '',
-      toEmails: [],
-      ccEmails: [],
-      bccEmails: [],
-      textHash: '',
-      text: '',
-      textLength: 0,
-      attachments: []
-    };
+    let email = new Email();
 
     try {
       let data: any = await simpleParser(eml);
@@ -345,19 +366,11 @@ finder.on('file', (file: any) => {
   files.add(path.normalize(file));
 });
 
-async function processAll(): Promise<boolean> {
-  console.log("Collecting EML files finished...");
-  return new Promise(async (resolve) => {
-    startPipe();
-    for (let file of files.values()) {
-      await processEmlFile(file);
-    }
-    endPipe();
-    console.log("Processing finished.");
-    resolve(true);
-  });
-}
-
-finder.on('end', () => {
-  processAll();
+finder.on('end', async () => {
+  startPipe();
+  for (let file of files.values()) {
+    await processEmlFile(file);
+  }
+  endPipe();
+  console.log("Processing finished.");
 });
