@@ -269,7 +269,7 @@ function getNameFromEmailAddress(email: string): string {
   return result;
 }
 
-async function convertEml(fileName: string, eml: string): Promise<IEmail> {
+async function convertEml(fileName: string, eml: string): Promise<Email> {
   return new Promise(async (resolve, reject) => {
     let email = new Email();
 
@@ -318,7 +318,7 @@ async function processEmlFile(emlFile: string): Promise<boolean> {
     let eml = fs.readFileSync(emlFile, 'utf-8');
     if (eml.substr(0,11) === 'Message-ID:' || eml.substr(0,14) === 'Received: from') {
       console.log('Processing ' + emlFile);
-      let email: IEmail = await convertEml(emlFile.substr(dirInput.length), eml);
+      let email: Email = await convertEml(emlFile.substr(dirInput.length), eml);
       let dateSent = '';
       try {
         dateSent = email.dateSent.toISOString();
