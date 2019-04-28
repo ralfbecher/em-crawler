@@ -81,12 +81,10 @@ function startPipe() {
 }
 startPipe();
 
-function nGramAggr(biGrams: string[][], triGrams: string[][]): string[][] {
+function nGramAggr(nGrams: string[][]): string[][] {
   let res: string[][] = [];
   let gramMap: Map<string, number[]> = new Map();
-  let nGram: string[][] = biGrams.concat(triGrams);
-
-  nGram.forEach((e: string[], i: number) => {
+  nGrams.forEach((e: string[], i: number) => {
     let t = e.length;
     let k = e.join(' ');
     if (!gramMap.has(k)) {
@@ -122,17 +120,18 @@ async function mineText(hash: string, text: string): Promise<string> {
       let docs = cleansedCorpus.documents;
       let list = docs[0].text ? docs[0].text.split(' ') : [];
       let biGrams = nGram.bigram(list);
-      let triGrams = nGram.trigram(list);
+      // let triGrams = nGram.trigram(list);
       let terms = new tm.DocumentTermMatrix(cleansedCorpus);
       terms.vocabulary.forEach(async (e: string, i: number) => {
         await writeRow(stringifierTerms, [hash, e, terms.data[0][i]]);
       });
-      nGramAggr(biGrams, triGrams).forEach(async (e: string[]) => {
-        await writeRow(stringifierNGrams, [hash, e[0], e[1], e[2]]);
+      // nGramAggr(biGrams.concat(triGrams)).forEach(async (e: string[]) => {
+      nGramAggr(biGrams).forEach(async (e: string[]) => {
+          await writeRow(stringifierNGrams, [hash, e[0], e[1], e[2]]);
       });
       resolve(docs[0].text);
     } else {
-      resolve('');
+      resolve(text); // todo !!! =>> Text Table: hash, text, clean
     }
   });
 }
