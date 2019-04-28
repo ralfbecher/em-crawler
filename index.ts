@@ -24,8 +24,9 @@ interface IEmail {
   toEmails: string[];
   ccEmails: string[];
   bccEmails: string[];
-  text: string;
   textHash: string;
+  text: string;
+  textLength: number;
   attachments: string[];
 }
 
@@ -33,10 +34,12 @@ const dirInput = '/Users/ralfbecher/Documents/Daten/maildir';
 // const dirInput = '/Users/ralfbecher/Documents/Daten/test';
 const dirOutput = './output';
 const csvFileMeta = 'maildir.csv';
+const csvFileTexts = 'mailtexts.csv';
 const csvFileTerms = 'mailterms.csv';
 const csvFileNGrams = 'mailngrams.csv';
 const csvFilePersons = 'mailpersons.csv';
-const outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmails', 'CCEmails', 'BCCEmails', 'Text', 'TextLength', 'Hash', 'Attachments'];
+const outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmails', 'CCEmails', 'BCCEmails', 'TextLength', 'Hash', 'Attachments'];
+const outputFieldsTexts = ['Hash', 'CleansedText'];
 const outputFieldsTerms = ['Hash', 'Term', 'Count'];
 const outputFieldsNGrams = ['Hash', 'nGram', 'Type', 'Count'];
 const outputFieldsPersons = ['ID', 'Email', 'Role'];
@@ -48,6 +51,7 @@ if (!fs.existsSync(dirOutput)) {
 }
 
 let outputMeta = fs.createWriteStream(dirOutput + '/' + csvFileMeta, { flags: 'w' });
+let outputTexts = fs.createWriteStream(dirOutput + '/' + csvFileTexts, { flags: 'w' });
 let outputTerms = fs.createWriteStream(dirOutput + '/' + csvFileTerms, { flags: 'w' });
 let outputNGrams = fs.createWriteStream(dirOutput + '/' + csvFileNGrams, { flags: 'w' });
 let outputPersons = fs.createWriteStream(dirOutput + '/' + csvFilePersons, { flags: 'w' });
@@ -57,6 +61,13 @@ const stringifierMeta = stringify({
   header: true,
   quoted: true,
   columns: outputFieldsMeta
+});
+
+const stringifierTexts = stringify({
+  delimiter: ',',
+  header: true,
+  quoted: true,
+  columns: outputFieldsTexts
 });
 
 const stringifierTerms = stringify({
@@ -80,13 +91,21 @@ const stringifierPersons = stringify({
   columns: outputFieldsPersons
 });
 
-function startPipe() {
+function startPipe(): void {
   stringifierMeta.pipe(outputMeta);
+  stringifierTexts.pipe(outputTexts);
   stringifierTerms.pipe(outputTerms);
   stringifierNGrams.pipe(outputNGrams);
   stringifierPersons.pipe(outputPersons);  
 }
-startPipe();
+
+function endPipe(): void {
+  stringifierMeta.end();
+  stringifierTexts.end();
+  stringifierTerms.end();
+  stringifierNGrams.end();
+  stringifierPersons.end();
+}
 
 function nGramAggr(nGrams: string[][]): string[][] {
   let res: string[][] = [];
@@ -111,8 +130,8 @@ function nGramAggr(nGrams: string[][]): string[][] {
   return res;
 }
 
-async function mineText(hash: string, text: string): Promise<string> {
-  return new Promise((resolve) => {
+async function mineText(hash: string, text: string): Promise<boolean> {
+  return new Promise(async (resolve) => {
     if (!hashes.has(hash)) {
       hashes.add(hash);
       text = tm.expandContractions(text);
@@ -129,6 +148,7 @@ async function mineText(hash: string, text: string): Promise<string> {
         .removeWords(removeWords)
         .stem('Porter');
       let docs = cleansedCorpus.documents;
+      await writeRow(stringifierTexts, [hash, docs]);
       let list = docs[0].text ? docs[0].text.split(' ') : [];
       let biGrams = nGram.bigram(list);
       // let triGrams = nGram.trigram(list);
@@ -140,9 +160,9 @@ async function mineText(hash: string, text: string): Promise<string> {
       nGramAggr(biGrams).forEach(async (e: string[]) => {
         await writeRow(stringifierNGrams, [hash, e[0], e[1], e[2]]);
       });
-      resolve(docs[0].text);
+      resolve(true);
     } else {
-      resolve(text); // todo !!! =>> Text Table: hash, text, clean
+      resolve(true);
     }
   });
 }
@@ -226,8 +246,9 @@ async function convertEml(fileName: string, eml: string): Promise<IEmail> {
       toEmails: [],
       ccEmails: [],
       bccEmails: [],
-      text: '',
       textHash: '',
+      text: '',
+      textLength: 0,
       attachments: []
     };
 
@@ -243,9 +264,9 @@ async function convertEml(fileName: string, eml: string): Promise<IEmail> {
       if (data.text) {
         email.textHash = require('crypto').createHash('md5').update(data.text).digest('base64');
         email.text = data.text;
+        email.textLength = data.text.lengh;
       } else {
-        email.textHash = '0000'; // placeholder for empty text#
-        email.text = '';
+        email.textHash = '0000'; // placeholder for empty text
       }
 
       email.fromEmail = cleanUpEmailsAndNames(data.from && data.from.text ? data.from.text : '');
@@ -284,7 +305,6 @@ async function processEmlFile(emlFile: string): Promise<boolean> {
         // do nothing
       }
       try {
-        let cleanText = await mineText(email.textHash, email.text);
         
         let csvRowMeta: string[] = [
           email.file,
@@ -296,13 +316,13 @@ async function processEmlFile(emlFile: string): Promise<boolean> {
           email.toEmails.join(','),
           email.ccEmails.join(','),
           email.bccEmails.join(','),
-          cleanText, // email.text,
-          email.text.length.toString(),
           email.textHash,
+          email.textLength.toString(),
           email.attachments.join(',')
         ];
   
         await writeRow(stringifierMeta, csvRowMeta);
+        await mineText(email.textHash, email.text);
         // await transposeMails(email.messageId, [email.fromEmail], 'From');
         await transposeMails(email.messageId, email.toEmails, 'To');
         await transposeMails(email.messageId, email.ccEmails, 'Cc');
@@ -328,13 +348,11 @@ finder.on('file', (file: any) => {
 async function processAll(): Promise<boolean> {
   console.log("Collecting EML files finished...");
   return new Promise(async (resolve) => {
+    startPipe();
     for (let file of files.values()) {
       await processEmlFile(file);
     }
-    stringifierMeta.end();
-    stringifierTerms.end();
-    stringifierNGrams.end();
-    stringifierPersons.end();
+    endPipe();
     console.log("Processing finished.");
     resolve(true);
   });
