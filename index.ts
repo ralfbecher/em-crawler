@@ -39,7 +39,7 @@ const csvFileTerms = 'mailterms.csv';
 const csvFileNGrams = 'mailngrams.csv';
 const csvFilePersons = 'mailpersons.csv';
 const outputFieldsMeta = ['File', 'ID', 'Date', 'Subject', 'FromEmail', 'FromName', 'ToEmails', 'CCEmails', 'BCCEmails', 'Hash', 'TextLength', 'Attachments'];
-const outputFieldsTexts = ['Hash', 'CleansedText'];
+const outputFieldsTexts = ['Hash', 'Text', 'CleansedText'];
 const outputFieldsTerms = ['Hash', 'Term', 'Count'];
 const outputFieldsNGrams = ['Hash', 'nGram', 'Type', 'Count'];
 const outputFieldsPersons = ['ID', 'Email', 'Role'];
@@ -148,7 +148,7 @@ async function mineText(hash: string, text: string): Promise<boolean> {
         .removeWords(removeWords)
         .stem('Porter');
       let docs = cleansedCorpus.documents;
-      await writeRow(stringifierTexts, [hash, docs]);
+      await writeRow(stringifierTexts, [hash, text, docs]);
       let list = docs[0].text ? docs[0].text.split(' ') : [];
       let biGrams = nGram.bigram(list);
       // let triGrams = nGram.trigram(list);
