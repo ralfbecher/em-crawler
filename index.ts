@@ -183,17 +183,21 @@ async function mineText(hash: string, text: string): Promise<boolean> {
         .removeWords(removeWords)
         .stem('Porter');
       let docs = cleansedCorpus.documents;
-      await writeRow(stringifierTexts, [hash, text, docs]);
-      let list = docs[0].text ? docs[0].text.split(' ') : [];
-      let biGrams = nGram.bigram(list);
-      // let triGrams = nGram.trigram(list);
+      if (docs.length > 0 && docs[0].text) {
+        await writeRow(stringifierTexts, [hash, text, docs[0].text]);
+        let list = docs[0].text.split(' ');
+        let biGrams = nGram.bigram(list);
+        // let triGrams = nGram.trigram(list);
+        // nGramAggr(biGrams.concat(triGrams)).forEach(async (e: string[]) => {
+        nGramAggr(biGrams).forEach(async (e: string[]) => {
+          await writeRow(stringifierNGrams, [hash, e[0], e[1], e[2]]);
+        });
+      } else {
+        await writeRow(stringifierTexts, [hash, text, '']);
+      }
       let terms = new tm.DocumentTermMatrix(cleansedCorpus);
       terms.vocabulary.forEach(async (e: string, i: number) => {
         await writeRow(stringifierTerms, [hash, e, terms.data[0][i]]);
-      });
-      // nGramAggr(biGrams.concat(triGrams)).forEach(async (e: string[]) => {
-      nGramAggr(biGrams).forEach(async (e: string[]) => {
-        await writeRow(stringifierNGrams, [hash, e[0], e[1], e[2]]);
       });
       resolve(true);
     } else {
